@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>LG Washer Card — Preview</title>
+<style>
+  html,body { margin:0; background:#1c1f24; font-family: system-ui, sans-serif; }
+  body.light { background:#eef1f4; }
+  .wrap { display:flex; flex-wrap:wrap; gap:24px; padding:24px; }
+  .slot { width:300px; }
+  ha-card {
+    display:block;
+    background: var(--card-background-color, #2b2f36);
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  }
+  body.light ha-card { background:#fff; --card-background-color:#fff; }
+  :root {
+    --primary-text-color: #fff;
+    --secondary-text-color: #9aa4ad;
+    --divider-color: rgba(255,255,255,.12);
+    --secondary-background-color: rgba(255,255,255,.08);
+  }
+  body.light :root, body.light {
+    --primary-text-color: #1c1f24;
+    --secondary-text-color: #5c6672;
+    --divider-color: rgba(0,0,0,.12);
+    --secondary-background-color: rgba(0,0,0,.06);
+  }
+  .label { color:#8fa; font-size:12px; margin-bottom:6px; font-family: monospace; }
+  .controls { padding: 12px 24px; color:#ccc; font-family: monospace; font-size: 12px; }
+  button { margin: 2px; }
+</style>
+</head>
+<body>
+
+<!-- minimal stand-ins for HA frontend elements so the card renders standalone -->
+<script>
+  class HaCard extends HTMLElement {
+    connectedCallback() {
+      if (!this.style.display) this.style.display = 'block';
+    }
+  }
+  customElements.define('ha-card', HaCard);
+
+  class HaIcon extends HTMLElement {
+    static get observedAttributes() { return ['icon']; }
+    connectedCallback() { this.render(); }
+    attributeChangedCallback() { this.render(); }
+    render() {
+      const icon = this.getAttribute('icon') || '';
+      this.style.display = 'inline-flex';
+      this.style.width = 'var(--mdc-icon-size, 20px)';
+      this.style.height = 'var(--mdc-icon-size, 20px)';
+      this.style.alignItems = 'center';
+      this.style.justifyContent = 'center';
+      this.textContent = '';
+      const dot = document.createElement('span');
+      dot.style.width = '60%';
+      dot.style.height = '60%';
+      dot.style.borderRadius = '50%';
+      dot.style.background = 'currentColor';
+      dot.title = icon;
+      this.appendChild(dot);
+    }
+  }
+  customElements.define('ha-icon', HaIcon);
+</script>
+
+<div class="wrap" id="wrap"></div>
+<div class="controls">
+  <div>Global: <button onclick="document.body.classList.toggle('light')">toggle light/dark</button></div>
+</div>
+
+<script src="./lg-washer-card.js"></script>
+<script>
+  const scenarios = [
+    { key: 'washing', label: 'Washing', course: 'cotton', remaining: 62, total: 95, doorLocked: true },
+    { key: 'rinsing', label: 'Rinsing', course: 'mixed_fabric', remaining: 24, total: 95, doorLocked: true },
+    { key: 'spinning', label: 'Spinning', course: 'bedding', remaining: 8, total: 95, doorLocked: true, spin: 1400 },
+    { key: 'steam', label: 'Steam Care', course: 'allergiene', remaining: 40, total: 60, doorLocked: true },
+    { key: 'end', label: 'Cycle Complete', course: 'cotton', remaining: 0, total: 95, doorLocked: false },
+    { key: 'standby', label: 'Ready (door open)', course: null, remaining: null, total: null, doorLocked: false, doorOpen: true },
+    { key: 'paused', label: 'Paused', course: 'cotton', remaining: 40, total: 95, doorLocked: true },
+    { key: 'error', label: 'Error', course: 'cotton', remaining: null, total: null, doorLocked: false, error: 'OE' },
+    { key: 'off', label: 'Off', course: null, remaining: null, total: null, doorLocked: null },
+  ];
+
+  function makeHass(scenario) {
+    const states = {
+      'sensor.washer_current_status': { state: scenario.key, attributes: {} },
+      'sensor.washer_remaining_time': { state: scenario.remaining ?? '', attributes: {} },
+      'sensor.washer_total_time': { state: scenario.total ?? '', attributes: {} },
+      'sensor.washer_course': { state: scenario.course ?? '', attributes: {} },
+      'sensor.washer_spin_speed': { state: scenario.spin ?? '', attributes: {} },
+      'binary_sensor.washer_door_lock': { state: scenario.doorLocked ? 'on' : 'off', attributes: {} },
+      'binary_sensor.washer_door_open': { state: scenario.doorOpen ? 'on' : 'off', attributes: {} },
+      'binary_sensor.washer_child_lock': { state: 'off', attributes: {} },
+      'sensor.washer_error': { state: scenario.error ?? '', attributes: {} },
+      'switch.washer_power': { state: scenario.key === 'off' ? 'off' : 'on', attributes: {} },
+    };
+    return {
+      states,
+      callService: (domain, svc, data) => console.log('callService', domain, svc, data),
+    };
+  }
+
+  const wrap = document.getElementById('wrap');
+  scenarios.forEach((scenario) => {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = scenario.label;
+    const card = document.createElement('lg-washer-card');
+    card.setConfig({
+      type: 'custom:lg-washer-card',
+      name: 'Washing Machine',
+      status_entity: 'sensor.washer_current_status',
+      remaining_time_entity: 'sensor.washer_remaining_time',
+      total_time_entity: 'sensor.washer_total_time',
+      course_entity: 'sensor.washer_course',
+      spin_speed_entity: 'sensor.washer_spin_speed',
+      door_lock_entity: 'binary_sensor.washer_door_lock',
+      door_open_entity: 'binary_sensor.washer_door_open',
+      child_lock_entity: 'binary_sensor.washer_child_lock',
+      error_entity: 'sensor.washer_error',
+      power_entity: 'switch.washer_power',
+    });
+    card.hass = makeHass(scenario);
+    slot.appendChild(label);
+    slot.appendChild(card);
+    wrap.appendChild(slot);
+  });
+</script>
+</body>
+</html>
