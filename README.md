@@ -1,6 +1,6 @@
 # LG Washer Card
 
-A realistic, animated Lovelace card for an LG (ThinQ) washing machine — a real front-loader illustration with a tumbling drum, suds, a porthole progress ring, a 7-segment digital countdown, phase-indicator lights, and a door-lock badge, all driven live off your Home Assistant entities.
+A realistic, animated Lovelace card for an LG (ThinQ) washing machine — a detailed front-loader illustration (detergent drawer, program knob, glowing 7-segment display, chrome door) with clothes that really tumble through sloshing water, a blurred spin with cabinet shake, steam and dry effects, a hinged door, a progress ring and a Wash → Rinse → Spin → Done stepper, all driven live off your Home Assistant entities.
 
 ![preview](preview.png)
 
@@ -46,6 +46,7 @@ door_open_entity: binary_sensor.washer_door_open
 child_lock_entity: binary_sensor.washer_child_lock
 error_entity: sensor.washer_error
 power_entity: switch.washer_power
+body_color: white
 show_progress_ring: true
 show_phase_lights: true
 ```
@@ -59,13 +60,14 @@ show_phase_lights: true
 | `progress_entity` | | A 0–100 sensor to drive the ring directly instead of deriving it from time. |
 | `course_entity` | | Program/cycle name, shown under the title and as a chip. |
 | `temperature_entity` / `spin_speed_entity` | | Shown as chips when present. |
-| `door_lock_entity` | | `binary_sensor` — `on` = locked. Shows the lock badge on the door. |
+| `door_lock_entity` | | `binary_sensor` — `on` = locked. Lights the lock icon on the display and adds a chip. |
 | `door_open_entity` | | `binary_sensor` — `on` = door ajar. Swings the door open in the illustration. |
 | `child_lock_entity` | | `binary_sensor` — `on` shows a "LC" child-lock readout and a chip. |
 | `error_entity` | | Sensor holding an error code (e.g. `OE`, `IE`). Overrides the status label/icon and pulses the bezel red. |
-| `power_entity` | | A `switch` — adds a header power toggle. |
+| `power_entity` | | A `switch` — makes the power button on the machine's panel a toggle. |
 | `show_progress_ring` | | Default `true`. |
-| `show_phase_lights` | | Default `true`. Wash → Rinse → Spin → Done indicator lights on the fascia. |
+| `show_phase_lights` | | Default `true`. Wash → Rinse → Spin → Done progress stepper under the machine. |
+| `body_color` | | Cabinet finish: `white` (default), `silver` or `black` (black steel). |
 
 ### Entity naming by integration
 
@@ -79,5 +81,5 @@ show_phase_lights: true
 
 ## Notes
 
-- No external dependencies (fonts, icon packs, build step) — a single vanilla JS custom element with an inline SVG illustration and a hand-drawn CSS 7-segment display, matching the rest of the `ar_smart_*` card family.
+- No external dependencies (fonts, icon packs, build step) — a single vanilla JS custom element with an inline SVG illustration and an SVG 7-segment display, matching the rest of the `ar_smart_*` card family.
 - `preview.html` in this repo is a standalone mock (no Home Assistant needed) that renders every state side by side — open it directly in a browser to check colours/animations after editing the card.

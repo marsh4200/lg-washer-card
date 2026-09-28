@@ -84,6 +84,8 @@
     { key: 'paused', label: 'Paused', course: 'cotton', remaining: 40, total: 95, doorLocked: true },
     { key: 'error', label: 'Error', course: 'cotton', remaining: null, total: null, doorLocked: false, error: 'OE' },
     { key: 'off', label: 'Off', course: null, remaining: null, total: null, doorLocked: null },
+    { key: 'washing', label: 'Washing (silver)', course: 'quick_30', remaining: 21, total: 30, doorLocked: true, body: 'silver', temp: 40 },
+    { key: 'spinning', label: 'Spinning (black steel)', course: 'towels', remaining: 5, total: 70, doorLocked: true, body: 'black', spin: 1200 },
   ];
 
   function makeHass(scenario) {
@@ -93,6 +95,7 @@
       'sensor.washer_total_time': { state: scenario.total ?? '', attributes: {} },
       'sensor.washer_course': { state: scenario.course ?? '', attributes: {} },
       'sensor.washer_spin_speed': { state: scenario.spin ?? '', attributes: {} },
+      'sensor.washer_temperature': { state: scenario.temp ?? '', attributes: {} },
       'binary_sensor.washer_door_lock': { state: scenario.doorLocked ? 'on' : 'off', attributes: {} },
       'binary_sensor.washer_door_open': { state: scenario.doorOpen ? 'on' : 'off', attributes: {} },
       'binary_sensor.washer_child_lock': { state: 'off', attributes: {} },
@@ -121,6 +124,8 @@
       total_time_entity: 'sensor.washer_total_time',
       course_entity: 'sensor.washer_course',
       spin_speed_entity: 'sensor.washer_spin_speed',
+      temperature_entity: 'sensor.washer_temperature',
+      body_color: scenario.body || 'white',
       door_lock_entity: 'binary_sensor.washer_door_lock',
       door_open_entity: 'binary_sensor.washer_door_open',
       child_lock_entity: 'binary_sensor.washer_child_lock',

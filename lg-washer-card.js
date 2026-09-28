@@ -13,7 +13,7 @@
  * https://github.com/marsh4200/lg-washer-card
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "2.0.0";
 
 /* ---------------------------------------------------------------------- */
 /*  State normalisation                                                   */
@@ -158,38 +158,234 @@ function formatMinutes(mins) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  Seven-segment digit renderer                                          */
+/*  Geometry + small SVG helpers                                          */
+/* ---------------------------------------------------------------------- */
+
+const CX = 150;
+const CY = 216;
+const DRUM_R = 76;
+const RING_R = 105;
+const RING_C = 2 * Math.PI * RING_R;
+
+const r1 = (n) => Math.round(n * 10) / 10;
+function pt(r, deg) {
+  const a = (deg * Math.PI) / 180;
+  return [r1(CX + r * Math.cos(a)), r1(CY + r * Math.sin(a))];
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Seven-segment display (drawn in SVG on the machine's own panel)       */
 /* ---------------------------------------------------------------------- */
 
 const SEG_MAP = {
-  "0": "abcdef",
-  "1": "bc",
-  "2": "abged",
-  "3": "abgcd",
-  "4": "fgbc",
-  "5": "afgcd",
-  "6": "afgecd",
-  "7": "abc",
-  "8": "abcdefg",
-  "9": "abcdfg",
-  "-": "g",
-  " ": "",
+  "0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc",
+  "5": "afgcd", "6": "afgecd", "7": "abc", "8": "abcdefg", "9": "abcdfg",
+  "-": "g", " ": "",
+  A: "abcefg", b: "cdefg", C: "adef", c: "deg", d: "bcdeg", E: "adefg",
+  F: "aefg", H: "bcefg", h: "cefg", I: "bc", i: "c", L: "def", n: "ceg",
+  O: "abcdef", o: "cdeg", P: "abefg", r: "eg", S: "afgcd", t: "defg",
+  U: "bcdef", u: "cde", y: "bcdfg",
 };
 
-function sevenSegDigit(char) {
-  const segs = SEG_MAP[char] ?? "";
-  const letters = "abcdefg".split("");
-  const spans = letters
-    .map((l) => `<span class="seg seg-${l}${segs.includes(l) ? " on" : ""}"></span>`)
-    .join("");
-  return `<span class="digit">${spans}</span>`;
+function segChars(ch) {
+  if (SEG_MAP[ch] !== undefined) return SEG_MAP[ch];
+  if (SEG_MAP[ch.toUpperCase()] !== undefined) return SEG_MAP[ch.toUpperCase()];
+  if (SEG_MAP[ch.toLowerCase()] !== undefined) return SEG_MAP[ch.toLowerCase()];
+  return "";
 }
 
-function sevenSegString(str) {
-  return String(str)
-    .split("")
-    .map((ch) => (ch === ":" ? '<span class="colon"><i></i><i></i></span>' : sevenSegDigit(ch)))
+// hexagonal segment polygons
+function hSeg(x1, x2, y, t) {
+  const h = t / 2;
+  return `${x1},${y} ${x1 + h},${y - h} ${x2 - h},${y - h} ${x2},${y} ${x2 - h},${y + h} ${x1 + h},${y + h}`;
+}
+function vSeg(x, y1, y2, t) {
+  const h = t / 2;
+  return `${x},${y1} ${x + h},${y1 + h} ${x + h},${y2 - h} ${x},${y2} ${x - h},${y2 - h} ${x - h},${y1 + h}`;
+}
+function digitSegs(x, y, w = 13, h = 24, t = 2.8) {
+  const g = 0.7; // gap between segments
+  const mid = y + h / 2;
+  return {
+    a: hSeg(x + g + t / 2, x + w - g - t / 2, y + t / 2, t),
+    g: hSeg(x + g + t / 2, x + w - g - t / 2, mid, t),
+    d: hSeg(x + g + t / 2, x + w - g - t / 2, y + h - t / 2, t),
+    f: vSeg(x + t / 2, y + g + t / 2, mid - g, t),
+    b: vSeg(x + w - t / 2, y + g + t / 2, mid - g, t),
+    e: vSeg(x + t / 2, mid + g, y + h - g - t / 2, t),
+    c: vSeg(x + w - t / 2, mid + g, y + h - g - t / 2, t),
+  };
+}
+
+const DIGIT_X = [164, 181, 202, 219];
+const DIGIT_X_TEXT = [167, 184, 201, 218];
+const DIGIT_Y = 28;
+
+// chars: array of 4 chars, colon: bool
+function lcdSvg(chars, colon) {
+  let off = "";
+  let on = "";
+  chars.forEach((ch, i) => {
+    const segs = digitSegs((colon ? DIGIT_X : DIGIT_X_TEXT)[i], DIGIT_Y);
+    const lit = segChars(ch);
+    Object.keys(segs).forEach((k) => {
+      const poly = `<polygon points="${segs[k]}"/>`;
+      if (lit.includes(k)) on += poly;
+      else off += poly;
+    });
+  });
+  const colonSvg = `<circle cx="198" cy="35" r="1.7"/><circle cx="198" cy="45" r="1.7"/>`;
+  return `
+    <g class="lcd-off">${off}</g>
+    <g class="lcd-on" filter="url(#lgw-led-glow)">${on}${colon ? `<g class="lcd-colon">${colonSvg}</g>` : ""}</g>`;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Drum contents: laundry, water, steam                                  */
+/* ---------------------------------------------------------------------- */
+
+const CLOTH = {
+  A: "M-16,-6 C-14,-14 -2,-15 4,-11 C10,-15 18,-10 16,-3 C19,4 12,12 4,10 C-2,15 -14,12 -15,5 C-20,2 -19,-3 -16,-6 Z",
+  B: "M-15,-9 C-6,-13 8,-12 15,-7 C18,-1 16,7 10,10 C2,13 -8,12 -13,8 C-18,3 -18,-4 -15,-9 Z",
+  C: "M-10,-6 C-3,-10 6,-9 10,-4 C12,2 7,8 1,8 C-5,9 -12,5 -11,0 Z",
+};
+const FOLD = {
+  A: "M-11,-1 C-5,3 3,-4 11,1 M-4,-10 C-3,-5 1,-4 3,-7",
+  B: "M-12,-2 C-4,1 5,-3 13,0 M-10,5 C-2,7 5,5 10,6",
+  C: "M-7,-1 C-2,2 3,-2 8,0",
+};
+const COLORS = ["#e76f51", "#5f84d6", "#e9c46a", "#2a9d8f", "#f2a7b8", "#efebe3", "#8e6fc7", "#3d4a63"];
+
+function cloth(shape, color) {
+  return `<use href="#lgw-cloth-${shape}" fill="${color}"/>` +
+    `<use href="#lgw-cloth-${shape}" fill="url(#lgw-cloth-shade)"/>` +
+    `<use href="#lgw-fold-${shape}"/>`;
+}
+
+// resting pile at the bottom of the drum
+const PILE = [
+  [102, 258, "B", 5, 1.2, -40],
+  [198, 258, "A", 7, 1.2, 34],
+  [138, 250, "C", 3, 1.3, -24],
+  [168, 246, "A", 4, 1.15, 14],
+  [120, 274, "A", 0, 1.4, -8],
+  [158, 280, "B", 1, 1.5, 4],
+  [190, 272, "C", 2, 1.4, 22],
+];
+
+function pileSvg(items = PILE) {
+  return items
+    .map(([x, y, s, c, sc, rot]) =>
+      `<g transform="translate(${x},${y}) rotate(${rot}) scale(${sc})">${cloth(s, COLORS[c])}</g>`)
     .join("");
+}
+
+// one tumbling garment: carried up the left wall (drum turns clockwise), then drops
+function tumbler(i, { r, a0, a1, shape, color, scale, dur, spinDir }) {
+  const [x0, y0] = pt(r, a0);
+  const [x1, y1] = pt(r, a1);
+  const cx = r1(x1 + (x0 - x1) * 0.25 + 8);
+  const cy = r1(y1 + (y0 - y1) * 0.55);
+  const path = `M${x0},${y0} A${r},${r} 0 0 1 ${x1},${y1} Q${cx},${cy} ${x0},${y0}`;
+  const arcLen = (r * (a1 - a0) * Math.PI) / 180;
+  const fallLen = Math.hypot(x1 - x0, y1 - y0);
+  const frac = r1((arcLen / (arcLen + fallLen)) * 100) / 100;
+  const begin = -((i * dur) / 4 + 0.13 * i);
+  return `
+    <g>
+      <animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite" path="${path}"
+        calcMode="spline" keyPoints="0;${frac};1" keyTimes="0;0.74;1"
+        keySplines="0.4 0 0.6 1;0.55 0 0.95 0.75"/>
+      <g transform="scale(${scale})">
+        <g>
+          <animateTransform attributeName="transform" type="rotate" additive="sum"
+            from="0" to="${360 * spinDir}" dur="${r1(dur * 1.35)}s" begin="${begin}s" repeatCount="indefinite"/>
+          ${cloth(shape, color)}
+        </g>
+      </g>
+    </g>`;
+}
+
+function tumbleSvg(slow, waterHtml = "") {
+  const dur = slow ? 4.8 : 2.9;
+  const pieces = [
+    { r: 54, a0: 96, a1: 222, shape: "A", color: COLORS[0], scale: 1.35, spinDir: 1 },
+    { r: 50, a0: 104, a1: 236, shape: "B", color: COLORS[1], scale: 1.3, spinDir: -1 },
+    { r: 56, a0: 88, a1: 214, shape: "C", color: COLORS[2], scale: 1.5, spinDir: 1 },
+    { r: 46, a0: 100, a1: 244, shape: "A", color: COLORS[4], scale: 1.15, spinDir: -1 },
+  ];
+  const rest = [
+    [114, 272, "B", 3, 1.35, -14],
+    [158, 280, "A", 5, 1.4, 6],
+    [192, 266, "C", 6, 1.4, 26],
+    [138, 258, "C", 7, 1.2, -20],
+  ];
+  return `
+    <g class="pile-rock">${pileSvg(rest)}</g>
+    ${waterHtml}
+    ${pieces.map((p, i) => tumbler(i, { ...p, dur })).join("")}`;
+}
+
+// clothes pinned to the drum wall at spin speed
+function spinSvg() {
+  const segs = [
+    [COLORS[0], 0], [COLORS[1], 58], [COLORS[2], 120], [COLORS[3], 190],
+    [COLORS[4], 250], [COLORS[5], 300], [COLORS[6], 340],
+  ];
+  const r = 66;
+  const c = 2 * Math.PI * r;
+  const arcs = segs
+    .map(([col, deg]) => {
+      const len = r1(c * 0.17);
+      return `<circle cx="${CX}" cy="${CY}" r="${r}" fill="none" stroke="${col}" stroke-width="15"
+        stroke-dasharray="${len} ${r1(c - len)}" transform="rotate(${deg} ${CX} ${CY})" stroke-linecap="round"/>`;
+    })
+    .join("");
+  return `<g class="spin-ring" filter="url(#lgw-motion-blur)">${arcs}</g>
+          <circle cx="${CX}" cy="${CY}" r="58" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.5" stroke-dasharray="3 9" class="spin-ring"/>`;
+}
+
+function wavePath(level, amp, len, phase) {
+  let d = `M${-40 + phase},${level}`;
+  for (let x = -40 + phase; x < 320; x += len) {
+    d += ` q${len / 4},${-amp} ${len / 2},0 q${len / 4},${amp} ${len / 2},0`;
+  }
+  d += ` L320,320 L-40,320 Z`;
+  return d;
+}
+
+function waterSvg(kind) {
+  const level = kind === "rinse" ? 234 : 243;
+  const cls = kind === "rinse" ? "water rinse" : "water";
+  const bubbles = [
+    [112, 0.0, 2.2], [128, 0.7, 1.6], [146, 1.3, 2.6], [162, 0.4, 1.8],
+    [178, 1.0, 2.2], [194, 1.7, 1.5], [136, 2.0, 1.4], [170, 2.4, 2.0],
+  ]
+    .map(([x, d, rr]) => `<circle class="bub" cx="${x}" cy="${level + 4}" r="${rr}" style="animation-delay:-${d}s"/>`)
+    .join("");
+  const foam = kind === "rinse" ? "" :
+    [[92, 3], [101, 5], [112, 3.5], [124, 6], [137, 4], [150, 6.5], [163, 4.5], [175, 6], [188, 3.5], [199, 5], [209, 3]]
+      .map(([x, rr], i) => `<circle class="foam" cx="${x}" cy="${level - 1 + (i % 3) - 1}" r="${rr}" style="animation-delay:-${(i * 0.37).toFixed(2)}s"/>`)
+      .join("");
+  return `
+    <g class="${cls}">
+      <path class="wave back" d="${wavePath(level - 3, 3, 44, 22)}"/>
+      <path class="wave front" d="${wavePath(level, 3.5, 40, 0)}"/>
+      ${bubbles}
+      <g class="foam-row" filter="url(#lgw-foam-blur)">${foam}</g>
+    </g>`;
+}
+
+function steamSvg() {
+  const wisps = [[112, 0], [138, 1.1], [164, 0.5], [188, 1.6], [150, 2.2]]
+    .map(([x, d]) =>
+      `<path class="wisp" d="M${x},292 c-9,-12 9,-22 0,-34 c-9,-12 7,-22 0,-34" style="animation-delay:-${d}s"/>`)
+    .join("");
+  return `<circle class="fog" cx="${CX}" cy="${CY}" r="${DRUM_R}"/><g filter="url(#lgw-soft)">${wisps}</g>`;
+}
+
+function heatSvg() {
+  return `<circle class="heat" cx="${CX}" cy="${CY}" r="${DRUM_R}" fill="url(#lgw-heat)"/>`;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -235,14 +431,17 @@ class LgWasherCard extends HTMLElement {
       child_lock_entity: "",
       power_entity: "",
       error_entity: "",
+      body_color: "white",
       show_progress_ring: true,
       show_phase_lights: true,
       tap_action_more_info: true,
       ...config,
     };
     this._lastRenderKey = null;
+    this._sceneKey = null;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._buildStaticDom();
+    if (this._hass) this._update();
   }
 
   set hass(hass) {
@@ -252,7 +451,7 @@ class LgWasherCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 6;
+    return 7;
   }
 
   connectedCallback() {
@@ -290,6 +489,12 @@ class LgWasherCard extends HTMLElement {
 
   _buildStaticDom() {
     const root = this.shadowRoot;
+    const lifter = "M-10,-76.5 L-6.5,-61 Q0,-56 6.5,-61 L10,-76.5 Z";
+    const ticks = Array.from({ length: 12 }, (_, i) => {
+      const [x, y] = [112 + 21 * Math.cos(((-150 + i * 25) - 90) * Math.PI / 180), 40 + 21 * Math.sin(((-150 + i * 25) - 90) * Math.PI / 180)];
+      return `<circle class="tick" data-i="${i}" cx="${r1(x)}" cy="${r1(y)}" r="1.1"/>`;
+    }).join("");
+
     root.innerHTML = `
       <style>${STYLE}</style>
       <ha-card>
@@ -298,113 +503,211 @@ class LgWasherCard extends HTMLElement {
             <span class="title"></span>
             <span class="course"></span>
           </div>
-          <button class="power-btn" title="Power" hidden>
-            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M13 3h-2v10h2V3m4.83 2.17-1.42 1.42A6.92 6.92 0 0 1 19 12a7 7 0 1 1-11.66-5.24L5.92 5.34A9 9 0 1 0 20 12a8.94 8.94 0 0 0-2.17-5.83Z"/></svg>
-          </button>
+          <span class="pct"></span>
         </div>
 
         <div class="machine" tabindex="0" role="button" aria-label="Washing machine status">
-          <svg class="art" viewBox="0 0 300 300" part="art">
+          <svg class="art" viewBox="0 0 300 372">
             <defs>
-              <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" class="body-stop-top"/>
-                <stop offset="1" class="body-stop-bottom"/>
+              <linearGradient id="lgw-body" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" class="s-body-a"/><stop offset="1" class="s-body-b"/>
               </linearGradient>
-              <radialGradient id="glassGrad" cx="0.35" cy="0.3" r="0.8">
-                <stop offset="0" class="glass-stop-1"/>
-                <stop offset="0.55" class="glass-stop-2"/>
-                <stop offset="1" class="glass-stop-3"/>
+              <linearGradient id="lgw-sides" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#000" stop-opacity=".10"/>
+                <stop offset=".08" stop-color="#000" stop-opacity="0"/>
+                <stop offset=".9" stop-color="#000" stop-opacity="0"/>
+                <stop offset="1" stop-color="#000" stop-opacity=".16"/>
+              </linearGradient>
+              <linearGradient id="lgw-panel" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" class="s-panel-a"/><stop offset="1" class="s-panel-b"/>
+              </linearGradient>
+              <radialGradient id="lgw-bezel" cx=".4" cy=".3" r=".8">
+                <stop offset="0" class="s-bezel-a"/><stop offset="1" class="s-bezel-b"/>
               </radialGradient>
-              <radialGradient id="bezelGrad" cx="0.5" cy="0.35" r="0.75">
-                <stop offset="0" class="bezel-stop-1"/>
-                <stop offset="1" class="bezel-stop-2"/>
+              <linearGradient id="lgw-chrome" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#ffffff"/>
+                <stop offset=".3" stop-color="#9aa1a9"/>
+                <stop offset=".52" stop-color="#f1f3f5"/>
+                <stop offset=".78" stop-color="#737b84"/>
+                <stop offset="1" stop-color="#d7dbe0"/>
+              </linearGradient>
+              <radialGradient id="lgw-drum-back" cx=".5" cy=".5" r=".5">
+                <stop offset="0" stop-color="#c3c9cf"/>
+                <stop offset=".55" stop-color="#8a9299"/>
+                <stop offset="1" stop-color="#40464d"/>
               </radialGradient>
-              <filter id="ringGlow" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="3" result="blur"/>
-                <feMerge>
-                  <feMergeNode in="blur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
+              <radialGradient id="lgw-vignette" cx=".5" cy=".5" r=".5">
+                <stop offset=".62" stop-color="#000" stop-opacity="0"/>
+                <stop offset="1" stop-color="#000" stop-opacity=".55"/>
+              </radialGradient>
+              <radialGradient id="lgw-tint" cx=".5" cy=".45" r=".5">
+                <stop offset="0" stop-color="#1d3a52" stop-opacity=".10"/>
+                <stop offset=".8" stop-color="#0d1c29" stop-opacity=".28"/>
+                <stop offset="1" stop-color="#050b11" stop-opacity=".6"/>
+              </radialGradient>
+              <linearGradient id="lgw-sheen" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#fff" stop-opacity=".55"/>
+                <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="lgw-lifter" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#d9dde1"/><stop offset="1" stop-color="#8e969e"/>
+              </linearGradient>
+              <linearGradient id="lgw-cloth-shade" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#fff" stop-opacity=".28"/>
+                <stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+                <stop offset="1" stop-color="#000" stop-opacity=".3"/>
+              </linearGradient>
+              <linearGradient id="lgw-water" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#8fc8f5" stop-opacity=".7"/>
+                <stop offset="1" stop-color="#2c6fb3" stop-opacity=".75"/>
+              </linearGradient>
+              <radialGradient id="lgw-heat" cx=".5" cy=".75" r=".7">
+                <stop offset="0" stop-color="#ffb347" stop-opacity=".45"/>
+                <stop offset="1" stop-color="#ff7a18" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="lgw-lcd" cx=".5" cy="0" r="1.2">
+                <stop offset="0" stop-color="#1b2128"/><stop offset="1" stop-color="#07090b"/>
+              </radialGradient>
+              <pattern id="lgw-perf" width="7" height="7" patternUnits="userSpaceOnUse">
+                <circle cx="3.5" cy="3.5" r="1.05" fill="#000" fill-opacity=".32"/>
+              </pattern>
+              <clipPath id="lgw-drum-clip"><circle cx="${CX}" cy="${CY}" r="${DRUM_R}"/></clipPath>
+              <filter id="lgw-led-glow" x="-30%" y="-30%" width="160%" height="160%">
+                <feGaussianBlur stdDeviation="1.1" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
               </filter>
+              <filter id="lgw-ring-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="2.4" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <filter id="lgw-motion-blur" x="-10%" y="-10%" width="120%" height="120%">
+                <feGaussianBlur stdDeviation="2.2"/>
+              </filter>
+              <filter id="lgw-soft" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3"/>
+              </filter>
+              <filter id="lgw-foam-blur" x="-20%" y="-50%" width="140%" height="200%">
+                <feGaussianBlur stdDeviation=".9"/>
+              </filter>
+              <filter id="lgw-shadow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="5"/>
+              </filter>
+              ${Object.keys(CLOTH).map((k) => `<path id="lgw-cloth-${k}" d="${CLOTH[k]}"/>`).join("")}
+              ${Object.keys(FOLD).map((k) => `<path id="lgw-fold-${k}" d="${FOLD[k]}" fill="none" stroke="#000" stroke-opacity=".2" stroke-width="1.5" stroke-linecap="round"/>`).join("")}
             </defs>
 
-            <!-- cabinet -->
-            <rect x="14" y="10" width="272" height="278" rx="20" fill="url(#bodyGrad)" class="cabinet"/>
-            <rect x="14" y="10" width="272" height="278" rx="20" class="cabinet-edge"/>
+            <ellipse cx="150" cy="364" rx="128" ry="7" fill="#000" opacity=".28" filter="url(#lgw-shadow)"/>
 
-            <!-- fascia strip -->
-            <rect x="14" y="10" width="272" height="34" rx="20" class="fascia"/>
-            <circle cx="34" cy="27" r="5" class="knob"/>
-            <text x="270" y="31" text-anchor="end" class="brand">SMART WASH</text>
+            <g class="body">
+              <!-- feet -->
+              <rect x="40" y="350" width="22" height="9" rx="2" class="foot"/>
+              <rect x="238" y="350" width="22" height="9" rx="2" class="foot"/>
 
-            <!-- phase lights -->
-            <g class="phase-lights" transform="translate(46,27)"></g>
+              <!-- cabinet -->
+              <rect x="22" y="8" width="256" height="346" rx="16" fill="url(#lgw-body)"/>
+              <rect x="22" y="8" width="256" height="346" rx="16" fill="url(#lgw-sides)"/>
+              <rect x="22.5" y="8.5" width="255" height="345" rx="15.5" class="edge"/>
 
-            <!-- door bezel -->
-            <circle cx="150" cy="176" r="104" fill="url(#bezelGrad)" class="bezel"/>
-            <circle cx="150" cy="176" r="104" class="bezel-ring"/>
+              <!-- control panel -->
+              <path d="M22,72 V24 A16,16 0 0 1 38,8 H262 A16,16 0 0 1 278,24 V72 Z" fill="url(#lgw-panel)"/>
+              <line x1="22" y1="72.5" x2="278" y2="72.5" class="seam"/>
+              <line x1="30" y1="10.5" x2="270" y2="10.5" class="topgloss"/>
 
-            <!-- progress ring -->
-            <circle cx="150" cy="176" r="112" class="progress-track"/>
-            <circle cx="150" cy="176" r="112" class="progress-bar" filter="url(#ringGlow)"
-                    transform="rotate(-90 150 176)"/>
+              <!-- detergent drawer -->
+              <rect x="30" y="20" width="58" height="40" rx="5" class="drawer"/>
+              <rect x="30" y="20" width="58" height="40" rx="5" class="drawer-edge"/>
+              <rect x="38" y="48" width="42" height="5" rx="2.5" class="drawer-slot"/>
 
-            <!-- door assembly (perspective wrapper) -->
-            <g class="door-hinge">
-              <g class="door-swing">
-                <circle cx="150" cy="176" r="92" fill="url(#glassGrad)" class="glass"/>
-                <circle cx="150" cy="176" r="92" class="glass-rim"/>
-
-                <!-- drum contents -->
-                <g class="drum" style="transform-origin: 150px 176px;">
-                  <circle cx="150" cy="176" r="80" class="drum-shade"/>
-                  <g class="laundry">
-                    <ellipse cx="122" cy="152" rx="26" ry="19" class="cloth cloth-1"/>
-                    <ellipse cx="180" cy="160" rx="24" ry="18" class="cloth cloth-2"/>
-                    <ellipse cx="148" cy="204" rx="30" ry="20" class="cloth cloth-3"/>
-                    <ellipse cx="112" cy="196" rx="18" ry="14" class="cloth cloth-4"/>
-                    <ellipse cx="188" cy="204" rx="16" ry="13" class="cloth cloth-5"/>
-                  </g>
-                  <g class="bubbles">
-                    <circle cx="118" cy="176" r="4" class="bubble b1"/>
-                    <circle cx="168" cy="140" r="3" class="bubble b2"/>
-                    <circle cx="190" cy="180" r="5" class="bubble b3"/>
-                    <circle cx="140" cy="222" r="3.5" class="bubble b4"/>
-                    <circle cx="160" cy="196" r="2.5" class="bubble b5"/>
-                    <circle cx="128" cy="210" r="2.5" class="bubble b6"/>
-                  </g>
-                  <g class="speed-lines">
-                    <path d="M92 176 a58 58 0 0 1 20 -50" class="speed-line sl1"/>
-                    <path d="M208 176 a58 58 0 0 1 -20 50" class="speed-line sl2"/>
-                    <path d="M150 96 a80 80 0 0 1 55 30" class="speed-line sl3"/>
-                  </g>
-                </g>
-
-                <circle cx="150" cy="176" r="92" class="glass-sheen"/>
+              <!-- program knob -->
+              <g class="knob-wrap">
+                ${ticks}
+                <circle cx="112" cy="40" r="16" fill="url(#lgw-chrome)"/>
+                <circle cx="112" cy="40" r="12.5" class="knob-face"/>
+                <line x1="112" y1="33" x2="112" y2="29.5" class="knob-mark"/>
               </g>
-            </g>
 
-            <!-- lock badge -->
-            <g class="lock-badge" transform="translate(222,244)">
-              <circle r="15" class="lock-badge-bg"/>
-              <path class="lock-icon" d="M-5,-1 h10 v7 h-10 z M-3,-1 v-3 a3,3 0 0 1 6,0 v3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-            </g>
+              <!-- display -->
+              <rect x="136" y="21" width="112" height="38" rx="6" fill="url(#lgw-lcd)"/>
+              <rect x="136.5" y="21.5" width="111" height="37" rx="5.5" class="lcd-edge"/>
+              <path d="M140,24 H244 Q244,31 236,31 H146 Q140,31 140,24 Z" fill="#fff" opacity=".05"/>
+              <g class="lcd-icons">
+                <g class="ico-lock" transform="translate(148,33)">
+                  <rect x="-3.6" y="-1" width="7.2" height="5.6" rx="1"/>
+                  <path d="M-2.2,-1 v-1.8 a2.2,2.2 0 0 1 4.4,0 v1.8" fill="none" stroke-width="1.3"/>
+                </g>
+                <g class="ico-wifi" transform="translate(148,49)">
+                  <path d="M-4.6,-1.4 a6.5,6.5 0 0 1 9.2,0" fill="none" stroke-width="1.3"/>
+                  <path d="M-2.7,0.6 a3.8,3.8 0 0 1 5.4,0" fill="none" stroke-width="1.3"/>
+                  <circle cx="0" cy="2.6" r="1"/>
+                </g>
+              </g>
+              <g class="lcd"></g>
 
-            <!-- checkmark burst for cycle complete -->
-            <g class="done-burst" transform="translate(150,176)">
-              <path d="M-18,0 L-6,14 L20,-16" class="done-check" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8"/>
+              <!-- power button -->
+              <g class="pwr" transform="translate(264,40)">
+                <circle r="10" class="pwr-bg"/>
+                <circle r="10" class="pwr-ring"/>
+                <path d="M-3.2,-2.6 a4.4,4.4 0 1 0 6.4,0 M0,-5 v4.6" class="pwr-glyph"/>
+              </g>
+
+              <!-- kick plate + filter hatch -->
+              <line x1="22" y1="327.5" x2="278" y2="327.5" class="seam"/>
+              <rect x="36" y="333" width="30" height="14" rx="3" class="hatch"/>
+
+              <!-- progress ring -->
+              <circle cx="${CX}" cy="${CY}" r="${RING_R}" class="ring-track"/>
+              <circle cx="${CX}" cy="${CY}" r="${RING_R}" class="ring-bar" filter="url(#lgw-ring-glow)"
+                      transform="rotate(-90 ${CX} ${CY})" stroke-dasharray="0 ${RING_C}"/>
+
+              <!-- door opening: gasket + drum (visible through glass) -->
+              <circle cx="${CX}" cy="${CY}" r="86" class="gasket"/>
+              <circle cx="${CX}" cy="${CY}" r="82" class="gasket-lip"/>
+              <g clip-path="url(#lgw-drum-clip)">
+                <circle cx="${CX}" cy="${CY}" r="${DRUM_R}" fill="url(#lgw-drum-back)"/>
+                <circle cx="${CX}" cy="${CY}" r="26" fill="none" stroke="#000" stroke-opacity=".18" stroke-width="2"/>
+                <circle cx="${CX}" cy="${CY}" r="9" fill="#000" fill-opacity=".16"/>
+                <g class="drum-rot">
+                  <circle cx="${CX}" cy="${CY}" r="${DRUM_R}" fill="url(#lgw-perf)"/>
+                  <circle cx="${CX}" cy="${CY}" r="71" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="7"/>
+                  ${[0, 120, 240].map((a) => `<path d="${lifter}" transform="translate(${CX} ${CY}) rotate(${a})" fill="url(#lgw-lifter)" stroke="#000" stroke-opacity=".25" stroke-width=".8"/>`).join("")}
+                </g>
+                <g class="scene"></g>
+                <circle cx="${CX}" cy="${CY}" r="${DRUM_R}" fill="url(#lgw-vignette)"/>
+              </g>
+
+              <!-- door: bezel + chrome ring + tinted glass (swings on left hinge) -->
+              <g class="door">
+                <circle cx="${CX}" cy="${CY}" r="95.5" fill="none" stroke="url(#lgw-bezel)" stroke-width="6" class="bezel"/>
+                <circle cx="${CX}" cy="${CY}" r="98" class="bezel-edge"/>
+                <circle cx="${CX}" cy="${CY}" r="89" fill="none" stroke="url(#lgw-chrome)" stroke-width="9"/>
+                <circle cx="${CX}" cy="${CY}" r="84.5" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="1"/>
+                <circle cx="${CX}" cy="${CY}" r="84" fill="url(#lgw-tint)"/>
+                <circle cx="${CX}" cy="${CY}" r="82" fill="none" stroke="#000" stroke-opacity=".28" stroke-width="4"/>
+                <ellipse cx="116" cy="170" rx="50" ry="17" transform="rotate(-38 116 170)" fill="url(#lgw-sheen)" opacity=".55"/>
+                <path d="M${pt(74, 196).join(",")} A74,74 0 0 1 ${pt(74, 252).join(",")}" class="glint"/>
+                <path d="M${pt(74, 22).join(",")} A74,74 0 0 1 ${pt(74, 48).join(",")}" class="glint dim"/>
+                <rect x="238" y="194" width="9" height="44" rx="4.5" class="handle"/>
+                <circle cx="${CX}" cy="${CY}" r="98" class="door-shade"/>
+              </g>
+
+              <!-- done tick on the glass -->
+              <g class="done-mark">
+                <circle cx="${CX}" cy="${CY}" r="26" class="done-bg"/>
+                <path d="M${CX - 11},${CY + 1} L${CX - 3},${CY + 9} L${CX + 12},${CY - 8}" class="done-check"/>
+              </g>
             </g>
           </svg>
         </div>
 
-        <div class="readout">
-          <div class="status-line">
-            <ha-icon class="status-icon" icon="mdi:washing-machine"></ha-icon>
+        <div class="status-row">
+          <div class="status-badge"><ha-icon class="status-icon" icon="mdi:washing-machine"></ha-icon></div>
+          <div class="status-text">
             <span class="status-label">Ready</span>
+            <span class="status-sub"></span>
           </div>
-          <div class="digital"></div>
         </div>
 
+        <div class="phases"></div>
         <div class="chips"></div>
       </ha-card>
     `;
@@ -412,10 +715,51 @@ class LgWasherCard extends HTMLElement {
     root.querySelector(".machine").addEventListener("click", () => {
       if (this._config.tap_action_more_info) this._fire(this._config.status_entity);
     });
-    root.querySelector(".power-btn").addEventListener("click", (e) => {
+    root.querySelector(".pwr").addEventListener("click", (e) => {
+      if (!this._config.power_entity) return;
       e.stopPropagation();
       this._togglePower();
     });
+  }
+
+  _renderScene(motion, medium) {
+    const key = `${motion}|${medium}`;
+    if (key === this._sceneKey) return;
+    this._sceneKey = key;
+    let html = "";
+    if (medium === "steam") html += steamSvg();
+    if (medium === "heat") html += heatSvg();
+    if (motion === "tumble" || motion === "tumble-slow") {
+      const water = medium === "water" || medium === "rinse" ? waterSvg(medium) : "";
+      html += tumbleSvg(motion === "tumble-slow", water);
+    } else if (motion === "spin-fast") {
+      html += `<g class="spin-wrap">${spinSvg()}</g>`;
+    } else {
+      html += pileSvg();
+    }
+    this.shadowRoot.querySelector(".scene").innerHTML = html;
+  }
+
+  _lcdContent({ resolved, remainMin, totalMin, childLock, errorCode, paused }) {
+    const right = (s) => {
+      const arr = String(s).slice(-4).split("");
+      while (arr.length < 4) arr.unshift(" ");
+      return arr;
+    };
+    if (resolved.key === "off" || resolved.key === "unavailable") return { chars: [" ", " ", " ", " "], colon: false, mode: "dark" };
+    if (errorCode || resolved.color === "error") {
+      const code = errorCode ? String(errorCode).replace(/[^a-z0-9]/gi, "") : "Err";
+      return { chars: right(code.slice(0, 3) || "Err"), colon: false, mode: "error" };
+    }
+    if (resolved.phase === 3) return { chars: [" ", "E", "n", "d"], colon: false, mode: "on" };
+    if (childLock && !resolved.running && !paused) return { chars: [" ", " ", "C", "L"], colon: false, mode: "on" };
+    const mins = resolved.running || paused ? remainMin : (totalMin ?? remainMin);
+    if (mins === null || mins === undefined) return { chars: [" ", "-", "-", "-"], colon: true, mode: "on" };
+    const h = Math.min(99, Math.floor(mins / 60));
+    const m = Math.round(mins % 60);
+    const hs = String(h).padStart(2, " ");
+    const ms = String(m).padStart(2, "0");
+    return { chars: [hs[0], hs[1], ms[0], ms[1]], colon: true, mode: paused ? "blink" : (resolved.running ? "run" : "on") };
   }
 
   _update(tickOnly) {
@@ -449,115 +793,145 @@ class LgWasherCard extends HTMLElement {
     const course = cfg.course_entity ? this._getState(cfg.course_entity)?.state : null;
     const temperature = cfg.temperature_entity ? this._getState(cfg.temperature_entity)?.state : null;
     const spinSpeed = cfg.spin_speed_entity ? this._getState(cfg.spin_speed_entity)?.state : null;
-    const errorCode = cfg.error_entity ? this._getState(cfg.error_entity)?.state : null;
+    let errorCode = cfg.error_entity ? this._getState(cfg.error_entity)?.state : null;
+    if (["", "none", "no_error", "unknown", "unavailable", "off", "ok"].includes(normalizeKey(errorCode))) errorCode = null;
     const powerOn = cfg.power_entity ? this._getState(cfg.power_entity)?.state === "on" : null;
+    const validCourse = course && !["unknown", "unavailable", "none", ""].includes(normalizeKey(course)) ? course : null;
 
     const renderKey = JSON.stringify([
-      resolved.key,
-      remainMin,
-      totalMin,
-      progress,
-      doorLocked,
-      doorOpen,
-      childLock,
-      course,
-      temperature,
-      spinSpeed,
-      errorCode,
-      powerOn,
-      cfg.name,
+      resolved.key, remainMin, totalMin, progress, doorLocked, doorOpen, childLock,
+      validCourse, temperature, spinSpeed, errorCode, powerOn, cfg.name, cfg.body_color,
     ]);
     if (tickOnly && renderKey === this._lastRenderKey) return;
     this._lastRenderKey = renderKey;
 
+    const paused = resolved.color === "paused";
+    if (resolved.running) {
+      this._lastAnim = resolved.anim;
+      this._lastColor = resolved.color;
+      this._lastPhase = resolved.phase;
+    }
+    const isError = resolved.color === "error" || !!errorCode;
+    const colorKey = isError ? "error" : resolved.color;
+
     const card = root.querySelector("ha-card");
-    const colorVar = `var(--lgw-${resolved.color})`;
+    const colorVar = `var(--lgw-${colorKey})`;
     card.style.setProperty("--lgw-active", colorVar);
 
     // header
     root.querySelector(".title").textContent = cfg.name;
-    root.querySelector(".course").textContent = course ? titleCase(course) : "";
-    const powerBtn = root.querySelector(".power-btn");
-    if (cfg.power_entity) {
-      powerBtn.hidden = false;
-      powerBtn.classList.toggle("on", !!powerOn);
-    } else {
-      powerBtn.hidden = true;
-    }
+    root.querySelector(".course").textContent = validCourse ? titleCase(validCourse) : "";
+    const pctEl = root.querySelector(".pct");
+    pctEl.textContent = (resolved.running || paused) && progress !== null ? `${Math.round(progress)}%` : "";
 
-    // status line
-    root.querySelector(".status-icon").setAttribute("icon", errorCode ? "mdi:alert-circle" : resolved.icon);
+    // status row
+    root.querySelector(".status-icon").setAttribute("icon", isError ? "mdi:alert-circle" : resolved.icon);
     root.querySelector(".status-label").textContent = errorCode ? `Error ${errorCode}` : resolved.label;
-
-    // digital readout
-    const digital = root.querySelector(".digital");
-    if (resolved.key === "off") {
-      digital.innerHTML = sevenSegString("--:--");
-    } else if (childLock) {
-      digital.innerHTML = sevenSegString(" lc ");
-    } else {
-      digital.innerHTML = sevenSegString(formatMinutes(remainMin));
+    let sub = "";
+    if ((resolved.running || paused) && remainMin !== null) {
+      const lang = this._hass.locale?.language || this._hass.language || undefined;
+      let endsAt = "";
+      try {
+        endsAt = new Date(Date.now() + remainMin * 60000).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" });
+      } catch (e) {
+        endsAt = "";
+      }
+      const left = remainMin >= 60 ? `${Math.floor(remainMin / 60)}h ${String(remainMin % 60).padStart(2, "0")}m left` : `${remainMin} min left`;
+      sub = paused ? `${left} · paused` : `${left}${endsAt ? ` · ends ${endsAt}` : ""}`;
+    } else if (resolved.phase === 3) {
+      sub = "Laundry is ready";
+    } else if (doorOpen) {
+      sub = "Door open";
+    } else if (!resolved.running && totalMin && resolved.key !== "off") {
+      sub = `${formatMinutes(totalMin)} cycle`;
     }
+    root.querySelector(".status-sub").textContent = sub;
 
-    // machine visuals
+    // machine classes
+    let motion = resolved.running ? resolved.anim : paused ? this._lastAnim || "tumble" : "none";
+    if (doorOpen) motion = "none";
+    const mediumSrc = resolved.running ? resolved.color : paused ? this._lastColor || "wash" : null;
+    let medium = { wash: "water", rinse: "rinse", steam: "steam", dry: "heat" }[mediumSrc] || "none";
+    if (motion === "spin-fast" || motion === "none") medium = medium === "steam" || medium === "heat" ? medium : "none";
+    if (motion === "none" && !paused) medium = "none";
+
     const machine = root.querySelector(".machine");
-    machine.classList.toggle("is-off", resolved.key === "off");
-    machine.classList.toggle("is-error", resolved.color === "error");
-    machine.classList.toggle("is-done", resolved.phase === 3);
-    machine.classList.toggle("is-paused", resolved.color === "paused");
+    ["m-none", "m-tumble", "m-tumble-slow", "m-spin-fast"].forEach((c) => machine.classList.remove(c));
+    machine.classList.add(`m-${motion}`);
+    machine.classList.toggle("is-off", resolved.key === "off" || resolved.key === "unavailable");
+    machine.classList.toggle("is-error", isError);
+    machine.classList.toggle("is-done", resolved.phase === 3 && !doorOpen);
+    machine.classList.toggle("is-paused", paused);
     machine.classList.toggle("door-open", !!doorOpen);
+    machine.classList.toggle("has-power", !!cfg.power_entity);
+    machine.classList.toggle("power-on", powerOn === null ? resolved.key !== "off" : powerOn);
 
-    const drum = root.querySelector(".drum");
-    drum.classList.remove("anim-tumble", "anim-tumble-slow", "anim-spin-fast", "anim-none");
-    drum.classList.add(`anim-${resolved.anim}`);
+    const art = root.querySelector(".art");
+    art.setAttribute("data-body", ["white", "silver", "black"].includes(cfg.body_color) ? cfg.body_color : "white");
+
+    this._renderScene(motion, medium);
+    try {
+      if (paused) art.pauseAnimations();
+      else art.unpauseAnimations();
+    } catch (e) { /* SMIL not supported */ }
+
+    // LCD
+    const lcd = this._lcdContent({ resolved, remainMin, totalMin, childLock, errorCode, paused });
+    const lcdEl = root.querySelector(".lcd");
+    lcdEl.innerHTML = lcdSvg(lcd.chars, lcd.colon);
+    lcdEl.setAttribute("class", `lcd lcdm-${lcd.mode}`);
+    root.querySelector(".ico-lock").classList.toggle("lit", !!doorLocked);
+    root.querySelector(".ico-wifi").classList.toggle("lit", resolved.key !== "off" && resolved.key !== "unavailable");
+
+    // knob position from course name
+    let idx = 0;
+    if (validCourse) {
+      for (const ch of normalizeKey(validCourse)) idx = (idx * 31 + ch.charCodeAt(0)) % 12;
+    }
+    root.querySelector(".knob-mark").setAttribute("transform", `rotate(${-150 + idx * 25} 112 40)`);
+    root.querySelectorAll(".tick").forEach((t) => t.classList.toggle("lit", validCourse && Number(t.dataset.i) === idx));
 
     // progress ring
-    const ring = root.querySelector(".progress-bar");
-    const track = root.querySelector(".progress-track");
-    const r = 112;
-    const circumference = 2 * Math.PI * r;
-    ring.style.stroke = colorVar;
-    if (cfg.show_progress_ring && progress !== null) {
+    const ring = root.querySelector(".ring-bar");
+    const track = root.querySelector(".ring-track");
+    if (cfg.show_progress_ring && progress !== null && resolved.key !== "off") {
       ring.style.display = "";
       track.style.display = "";
-      const dash = (progress / 100) * circumference;
-      ring.setAttribute("stroke-dasharray", `${dash} ${circumference}`);
+      const dash = Math.max(0.001, (progress / 100) * RING_C);
+      ring.setAttribute("stroke-dasharray", `${dash} ${RING_C}`);
+      ring.style.opacity = progress > 0 ? "" : "0";
     } else {
       ring.style.display = "none";
       track.style.display = "none";
     }
 
-    // lock badge
-    const lockBadge = root.querySelector(".lock-badge");
-    lockBadge.style.display = doorLocked === null ? "none" : "";
-    lockBadge.classList.toggle("locked", !!doorLocked);
-
-    // phase lights
+    // phase stepper
+    const phasesEl = root.querySelector(".phases");
     if (cfg.show_phase_lights) {
-      const g = root.querySelector(".phase-lights");
-      g.style.display = "";
-      g.innerHTML = PHASES.map((p, i) => {
-        const litSolid = resolved.phase !== null && resolved.phase !== -1 && i <= resolved.phase;
-        const litPulse = resolved.phase !== null && i === resolved.phase && resolved.running;
-        const cls = ["phase-dot", litSolid ? "lit" : "", litPulse ? "pulse" : ""].filter(Boolean).join(" ");
-        return `<circle cx="${i * 27}" cy="0" r="4" class="${cls}"></circle>`;
+      phasesEl.style.display = "";
+      const phase = resolved.phase === -1 ? (this._lastPhase ?? 0) : resolved.phase;
+      phasesEl.innerHTML = PHASES.map((p, i) => {
+        let st = "";
+        if (phase !== null && phase !== undefined) {
+          if (phase === 3 || i < phase) st = "done";
+          else if (i === phase) st = resolved.running ? "current" : paused ? "current held" : "done";
+        }
+        return `<div class="phase ${st}"><span class="bar"><i></i></span><span class="plabel">${p}</span></div>`;
       }).join("");
     } else {
-      root.querySelector(".phase-lights").style.display = "none";
+      phasesEl.style.display = "none";
     }
 
-    // chips row
+    // chips
     const chips = [];
-    if (course) chips.push({ icon: "mdi:tune-variant", label: titleCase(course) });
-    if (temperature) chips.push({ icon: "mdi:thermometer", label: /\d/.test(String(temperature)) ? `${temperature}°` : titleCase(temperature) });
-    if (spinSpeed) chips.push({ icon: "mdi:rotate-3d-variant", label: /\d/.test(String(spinSpeed)) ? `${spinSpeed} RPM` : titleCase(spinSpeed) });
-    if (childLock) chips.push({ icon: "mdi:lock", label: "Child Lock" });
+    if (temperature && !["unknown", "unavailable"].includes(temperature)) chips.push({ icon: "mdi:thermometer", label: /\d/.test(String(temperature)) ? `${temperature}°` : titleCase(temperature) });
+    if (spinSpeed && !["unknown", "unavailable"].includes(spinSpeed)) chips.push({ icon: "mdi:rotate-3d-variant", label: /\d/.test(String(spinSpeed)) ? `${spinSpeed} rpm` : titleCase(spinSpeed) });
+    if (doorLocked) chips.push({ icon: "mdi:lock", label: "Door locked" });
+    if (childLock) chips.push({ icon: "mdi:baby-face-outline", label: "Child lock" });
     if (totalMin) chips.push({ icon: "mdi:timer-outline", label: `${formatMinutes(totalMin)} total` });
 
     root.querySelector(".chips").innerHTML = chips
-      .map(
-        (c) => `<span class="chip"><ha-icon icon="${c.icon}"></ha-icon>${c.label}</span>`
-      )
+      .map((c) => `<span class="chip"><ha-icon icon="${c.icon}"></ha-icon>${c.label}</span>`)
       .join("");
   }
 }
@@ -597,6 +971,15 @@ class LgWasherCardEditor extends HTMLElement {
       entPicker("child_lock_entity", "binary_sensor", "Child lock entity"),
       entPicker("error_entity", "sensor", "Error code entity"),
       entPicker("power_entity", "switch", "Power switch entity"),
+      {
+        name: "body_color",
+        label: "Cabinet finish",
+        selector: { select: { mode: "dropdown", options: [
+          { value: "white", label: "White" },
+          { value: "silver", label: "Silver / stainless" },
+          { value: "black", label: "Black steel" },
+        ] } },
+      },
       { name: "show_progress_ring", selector: { boolean: {} }, label: "Show progress ring" },
       { name: "show_phase_lights", selector: { boolean: {} }, label: "Show phase indicator lights" },
     ];
@@ -625,297 +1008,230 @@ class LgWasherCardEditor extends HTMLElement {
 
 const STYLE = `
 :host {
-  --lgw-wash: #3b82f6;
-  --lgw-rinse: #22c1c3;
-  --lgw-spin: #06b6d4;
-  --lgw-steam: #a855f7;
+  --lgw-wash: #3b8cf6;
+  --lgw-rinse: #1fb8c9;
+  --lgw-spin: #0ea5e9;
+  --lgw-steam: #a86cf7;
   --lgw-cool: #34d399;
   --lgw-dry: #f59e0b;
   --lgw-done: #22c55e;
   --lgw-paused: #f5a623;
   --lgw-error: #ef4444;
   --lgw-neutral: var(--secondary-text-color, #90a0ab);
-  --lgw-led: #ff8a3d;
+  --lgw-led: #ff9b4a;
 }
 
 ha-card {
   padding: 16px 16px 14px;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
   overflow: hidden;
 }
 
-.header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
+/* header */
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.title-wrap { display: flex; flex-direction: column; min-width: 0; }
+.title { font-size: 1.05rem; font-weight: 600; color: var(--primary-text-color); line-height: 1.3; }
+.course { font-size: .78rem; color: var(--secondary-text-color); min-height: 1em; }
+.pct { font-size: 1.05rem; font-weight: 600; color: var(--lgw-active); font-variant-numeric: tabular-nums; }
 
-.title-wrap { display: flex; flex-direction: column; }
-
-.title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--primary-text-color);
-}
-
-.course {
-  font-size: 0.75rem;
-  color: var(--secondary-text-color);
-  min-height: 1em;
-}
-
-.power-btn {
-  border: none;
-  background: var(--secondary-background-color, rgba(127,127,127,.15));
-  color: var(--lgw-neutral);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex: none;
-}
-.power-btn.on {
-  color: white;
-  background: var(--lgw-wash);
-}
-
-.machine {
-  position: relative;
-  width: min(240px, 78%);
-  margin: 4px auto 8px;
-  cursor: pointer;
-  outline: none;
-}
-
+/* machine */
+.machine { width: min(250px, 80%); margin: 8px auto 4px; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; }
 .art { width: 100%; height: auto; display: block; overflow: visible; }
+.art * { transform-box: view-box; }
 
-/* cabinet */
-.body-stop-top { stop-color: #f6f7f9; }
-.body-stop-bottom { stop-color: #dcdfe3; }
-:host-context([theme-dark]) .body-stop-top,
-@media (prefers-color-scheme: dark) {
-  .body-stop-top { stop-color: #4b5158; }
-  .body-stop-bottom { stop-color: #2c3036; }
-}
-.cabinet-edge { fill: none; stroke: rgba(0,0,0,0.08); stroke-width: 1; }
-.fascia { fill: rgba(0,0,0,0.06); }
-.knob { fill: var(--lgw-neutral); opacity: .55; }
-.brand {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  fill: var(--lgw-neutral);
-  opacity: .55;
-  font-family: system-ui, sans-serif;
-}
+/* cabinet finishes */
+.s-body-a { stop-color: #fbfbfc; } .s-body-b { stop-color: #dcdfe3; }
+.s-panel-a { stop-color: #f1f2f4; } .s-panel-b { stop-color: #dde0e4; }
+.s-bezel-a { stop-color: #ffffff; } .s-bezel-b { stop-color: #cdd2d7; }
+.art[data-body="silver"] .s-body-a { stop-color: #e1e4e7; }
+.art[data-body="silver"] .s-body-b { stop-color: #9ea5ac; }
+.art[data-body="silver"] .s-panel-a { stop-color: #d3d7db; }
+.art[data-body="silver"] .s-panel-b { stop-color: #b1b7bd; }
+.art[data-body="silver"] .s-bezel-a { stop-color: #eceef0; }
+.art[data-body="silver"] .s-bezel-b { stop-color: #a3aab1; }
+.art[data-body="black"] .s-body-a { stop-color: #4b5057; }
+.art[data-body="black"] .s-body-b { stop-color: #1e2226; }
+.art[data-body="black"] .s-panel-a { stop-color: #3c4148; }
+.art[data-body="black"] .s-panel-b { stop-color: #272b30; }
+.art[data-body="black"] .s-bezel-a { stop-color: #5a6067; }
+.art[data-body="black"] .s-bezel-b { stop-color: #25292d; }
 
-/* bezel / door */
-.bezel-stop-1 { stop-color: #ffffff; }
-.bezel-stop-2 { stop-color: #b9bec4; }
-.bezel { opacity: .9; }
-.bezel-ring { fill: none; stroke: rgba(0,0,0,0.12); stroke-width: 2; }
+.edge { fill: none; stroke: rgba(0,0,0,.14); stroke-width: 1; }
+.art[data-body="black"] .edge { stroke: rgba(255,255,255,.10); }
+.seam { stroke: rgba(0,0,0,.14); stroke-width: 1; }
+.art[data-body="black"] .seam { stroke: rgba(0,0,0,.5); }
+.topgloss { stroke: rgba(255,255,255,.7); stroke-width: 1; stroke-linecap: round; }
+.art[data-body="black"] .topgloss { stroke: rgba(255,255,255,.12); }
+.foot { fill: #2a2e33; }
 
-.glass-stop-1 { stop-color: #4b5966; }
-.glass-stop-2 { stop-color: #1a232b; }
-.glass-stop-3 { stop-color: #05080b; }
-.glass { transition: filter .4s ease; }
-.glass-rim { fill: none; stroke: rgba(255,255,255,0.25); stroke-width: 2; }
-.glass-sheen {
-  fill: none;
-  stroke: rgba(255,255,255,0.18);
-  stroke-width: 10;
-  stroke-dasharray: 90 400;
-  stroke-linecap: round;
-  transform: rotate(-40deg);
-  transform-origin: 150px 176px;
-  pointer-events: none;
-}
+.drawer { fill: rgba(0,0,0,.035); }
+.drawer-edge { fill: none; stroke: rgba(0,0,0,.14); }
+.art[data-body="black"] .drawer-edge { stroke: rgba(0,0,0,.45); }
+.drawer-slot { fill: rgba(0,0,0,.28); }
 
-.door-hinge { transform-origin: 58px 176px; }
-.door-swing { transform-origin: 58px 176px; transition: transform .6s cubic-bezier(.4,0,.2,1); }
-.machine.door-open .door-swing { transform: rotateY(58deg) translateX(-6px) scaleX(.86); }
-.machine.door-open .glass { filter: brightness(0.4); }
+.knob-face { fill: #e7eaed; stroke: rgba(0,0,0,.12); }
+.art[data-body="black"] .knob-face { fill: #33373c; }
+.knob-mark { stroke: var(--lgw-active, #888); stroke-width: 2.4; stroke-linecap: round; transition: transform .6s ease; }
+.machine.is-off .knob-mark { stroke: #9aa0a6; }
+.tick { fill: rgba(0,0,0,.18); }
+.art[data-body="black"] .tick { fill: rgba(255,255,255,.18); }
+.tick.lit { fill: var(--lgw-active); }
+.machine.is-off .tick.lit { fill: rgba(0,0,0,.18); }
+
+.lcd-edge { fill: none; stroke: rgba(0,0,0,.4); }
+.lcd-off polygon, .lcd-off circle { fill: rgba(255,155,74,.07); }
+.lcd-on polygon, .lcd-on circle { fill: var(--lgw-led); }
+.lcdm-dark .lcd-off polygon, .lcdm-dark .lcd-off circle { fill: rgba(255,255,255,.03); }
+.lcdm-error .lcd-on polygon, .lcdm-error .lcd-on circle { fill: #ff4d4d; }
+.lcdm-error .lcd-on { animation: lgw-blink 1s steps(2, jump-none) infinite; }
+.lcdm-blink .lcd-on { animation: lgw-blink 1.2s steps(2, jump-none) infinite; }
+.lcdm-run .lcd-colon { animation: lgw-blink 1s steps(2, jump-none) infinite; }
+@keyframes lgw-blink { 0% { opacity: 1; } 100% { opacity: .15; } }
+
+.lcd-icons g { fill: rgba(255,155,74,.1); stroke: rgba(255,155,74,.1); }
+.lcd-icons g.lit { fill: var(--lgw-led); stroke: var(--lgw-led); }
+.ico-lock rect { stroke: none; }
+.ico-wifi circle { stroke: none; }
+
+.pwr-bg { fill: rgba(0,0,0,.06); }
+.art[data-body="black"] .pwr-bg { fill: rgba(0,0,0,.3); }
+.pwr-ring { fill: none; stroke: rgba(0,0,0,.18); stroke-width: 1.2; }
+.pwr-glyph { fill: none; stroke: #8a9199; stroke-width: 1.6; stroke-linecap: round; }
+.machine.power-on .pwr-ring { stroke: var(--lgw-active); stroke-width: 1.6; filter: drop-shadow(0 0 2px var(--lgw-active)); }
+.machine.power-on .pwr-glyph { stroke: var(--lgw-active); }
+.machine.has-power .pwr { cursor: pointer; }
+
+.hatch { fill: rgba(0,0,0,.04); stroke: rgba(0,0,0,.14); }
 
 /* progress ring */
-.progress-track {
+.ring-track { fill: none; stroke: rgba(0,0,0,.08); stroke-width: 3; }
+.art[data-body="black"] .ring-track { stroke: rgba(255,255,255,.08); }
+.ring-bar {
   fill: none;
-  stroke: var(--divider-color, rgba(127,127,127,.25));
-  stroke-width: 4;
-}
-.progress-bar {
-  fill: none;
-  stroke-width: 4;
+  stroke: var(--lgw-active);
+  stroke-width: 3.5;
   stroke-linecap: round;
-  transition: stroke-dasharray .6s ease, stroke .4s ease;
+  transition: stroke-dasharray .8s ease, stroke .4s ease;
 }
-.machine:not(.is-off) .progress-bar { animation: lgw-ring-pulse 2.4s ease-in-out infinite; }
+.machine.is-paused .ring-bar { animation: lgw-breathe 1.6s ease-in-out infinite; }
+.machine.is-error .ring-bar, .machine.is-error .ring-track { stroke: var(--lgw-error); animation: lgw-breathe 1s ease-in-out infinite; }
+@keyframes lgw-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
-@keyframes lgw-ring-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .65; }
-}
+/* opening + drum */
+.gasket { fill: #2b2f34; }
+.gasket-lip { fill: none; stroke: #3d4248; stroke-width: 4; }
 
-/* drum contents */
-.drum { transform-box: fill-box; }
-.drum-shade { fill: rgba(0,0,0,0.15); }
-.cloth { opacity: .9; }
-.cloth-1 { fill: #e0574f; }
-.cloth-2 { fill: #4f8de0; }
-.cloth-3 { fill: #e0c14f; }
-.cloth-4 { fill: #7fd1c6; }
-.cloth-5 { fill: #b97fd1; }
+.drum-rot { transform-origin: 150px 216px; }
+.m-tumble .drum-rot { animation: lgw-rot 3.4s linear infinite; }
+.m-tumble-slow .drum-rot { animation: lgw-rot 6s linear infinite; }
+.m-spin-fast .drum-rot { animation: lgw-rot .36s linear infinite; }
+@keyframes lgw-rot { to { transform: rotate(360deg); } }
 
-.bubble { fill: rgba(255,255,255,0.55); opacity: 0; }
-.machine.is-off .bubble, .machine.is-done .bubble { opacity: 0 !important; }
+.pile-rock { transform-origin: 150px 216px; animation: lgw-rock 3.4s ease-in-out infinite; }
+.m-tumble-slow .pile-rock { animation-duration: 6s; }
+@keyframes lgw-rock { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(7deg); } }
 
-.speed-lines { opacity: 0; }
-.speed-line { fill: none; stroke: rgba(255,255,255,.55); stroke-width: 3; stroke-linecap: round; }
-
-.anim-none .laundry, .anim-none .bubble { animation: none; }
-
-.anim-tumble-slow { animation: lgw-tumble 6.5s ease-in-out infinite; }
-.anim-tumble { animation: lgw-tumble 3.1s ease-in-out infinite; }
-.anim-tumble .bubble { animation: lgw-bubble 2.4s ease-in-out infinite; }
-.anim-tumble-slow .bubble { animation: lgw-bubble 3.6s ease-in-out infinite; }
-.anim-tumble .bubble.b1, .anim-tumble-slow .bubble.b1 { animation-delay: 0s; }
-.anim-tumble .bubble.b2, .anim-tumble-slow .bubble.b2 { animation-delay: .3s; }
-.anim-tumble .bubble.b3, .anim-tumble-slow .bubble.b3 { animation-delay: .6s; }
-.anim-tumble .bubble.b4, .anim-tumble-slow .bubble.b4 { animation-delay: .9s; }
-.anim-tumble .bubble.b5, .anim-tumble-slow .bubble.b5 { animation-delay: 1.2s; }
-.anim-tumble .bubble.b6, .anim-tumble-slow .bubble.b6 { animation-delay: 1.5s; }
-
-.anim-spin-fast {
-  animation: lgw-spin 0.45s linear infinite;
-  filter: blur(0.6px);
-}
-.anim-spin-fast .speed-lines { opacity: 1; animation: lgw-flicker 0.45s linear infinite; }
-.anim-spin-fast .bubble { opacity: 0; }
-.anim-spin-fast .cloth { opacity: .45; }
-
-@keyframes lgw-tumble {
-  0%   { transform: rotate(0deg); }
-  25%  { transform: rotate(48deg); }
-  48%  { transform: rotate(-14deg); }
-  70%  { transform: rotate(30deg); }
-  100% { transform: rotate(0deg); }
-}
-@keyframes lgw-spin { to { transform: rotate(360deg); } }
-@keyframes lgw-flicker { 0%,100% { opacity: .9; } 50% { opacity: .5; } }
-@keyframes lgw-bubble {
-  0%, 100% { opacity: 0; transform: translateY(2px) scale(.7); }
-  50% { opacity: .8; transform: translateY(-3px) scale(1); }
+.spin-wrap { transform-origin: 150px 216px; animation: lgw-rot .36s linear infinite; }
+.m-spin-fast .body { animation: lgw-shake .13s linear infinite; }
+@keyframes lgw-shake {
+  0% { transform: translate(0, 0); } 25% { transform: translate(.7px, -.4px); }
+  50% { transform: translate(-.5px, .5px); } 75% { transform: translate(.4px, .6px); }
+  100% { transform: translate(0, 0); }
 }
 
-/* state colour wash on the glass */
-.machine:not(.is-off) .glass { filter: drop-shadow(0 0 0 transparent); }
-
-/* lock badge */
-.lock-badge { color: white; }
-.lock-badge-bg { fill: var(--lgw-neutral); }
-.lock-badge.locked .lock-badge-bg { fill: var(--lgw-active, var(--lgw-wash)); }
-
-/* done burst */
-.done-check {
-  stroke: white;
-  stroke-dasharray: 60;
-  stroke-dashoffset: 60;
-  opacity: 0;
+/* water */
+.water { transform-origin: 150px 216px; animation: lgw-slosh 3.4s ease-in-out infinite; }
+.m-tumble-slow .water { animation-duration: 6s; }
+@keyframes lgw-slosh { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(4deg); } }
+.wave { fill: url(#lgw-water); }
+.wave.back { opacity: .45; animation: lgw-wave 2.8s linear infinite reverse; }
+.wave.front { opacity: .8; animation: lgw-wave 1.7s linear infinite; }
+.water.rinse .wave { fill: #9fdcf0; }
+.water.rinse .wave.front { opacity: .55; }
+@keyframes lgw-wave { from { transform: translateX(0); } to { transform: translateX(-40px); } }
+.bub { fill: rgba(255,255,255,.75); animation: lgw-rise 2.4s ease-in infinite; }
+@keyframes lgw-rise {
+  0% { transform: translateY(26px); opacity: 0; }
+  25% { opacity: .9; }
+  90% { opacity: .8; }
+  100% { transform: translateY(-2px); opacity: 0; }
 }
-.done-burst circle {
-  opacity: 0;
-}
-.machine.is-done .done-burst {
-  opacity: 1;
-}
-.machine.is-done .done-check {
-  animation: lgw-check 0.6s ease forwards 0.15s;
-}
-@keyframes lgw-check {
-  to { stroke-dashoffset: 0; opacity: 1; }
-}
-.machine.is-done .glass { filter: saturate(0.7); }
-.machine:not(.is-done) .done-check { opacity: 0; }
+.foam { fill: rgba(255,255,255,.62); animation: lgw-foam 1.9s ease-in-out infinite; }
+@keyframes lgw-foam { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
 
-.machine.is-error .bezel-ring { animation: lgw-alert 1s ease-in-out infinite; stroke: var(--lgw-error); stroke-width: 3; }
-@keyframes lgw-alert { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
-
-.machine.is-off .art { filter: grayscale(0.85) brightness(0.92); }
-.machine.is-paused .progress-bar { animation: lgw-ring-pulse 1s ease-in-out infinite; }
-
-/* phase lights */
-.phase-dot { fill: rgba(127,127,127,.35); transition: fill .3s ease; }
-.phase-dot.lit { fill: var(--lgw-active, var(--lgw-wash)); }
-.phase-dot.pulse { animation: lgw-dot-pulse 1.1s ease-in-out infinite; }
-@keyframes lgw-dot-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-
-/* readout */
-.readout {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 2px;
+/* steam / heat */
+.fog { fill: rgba(255,255,255,.14); animation: lgw-breathe 3s ease-in-out infinite; }
+.wisp { fill: none; stroke: rgba(255,255,255,.55); stroke-width: 8; stroke-linecap: round; animation: lgw-wisp 3s ease-out infinite; }
+@keyframes lgw-wisp {
+  0% { transform: translateY(10px); opacity: 0; }
+  30% { opacity: .9; }
+  100% { transform: translateY(-70px); opacity: 0; }
 }
-.status-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.status-icon { color: var(--lgw-active, var(--lgw-neutral)); flex: none; }
-.status-label {
-  font-size: 0.92rem;
-  font-weight: 600;
-  color: var(--primary-text-color);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.heat { animation: lgw-breathe 2.6s ease-in-out infinite; }
 
-.digital {
-  display: flex;
-  align-items: center;
-  background: #101418;
-  border-radius: 6px;
-  padding: 4px 8px;
-  flex: none;
-}
+/* door */
+.bezel-edge { fill: none; stroke: rgba(0,0,0,.14); stroke-width: 1; }
+.art[data-body="black"] .bezel-edge { stroke: rgba(255,255,255,.08); }
+.glint { fill: none; stroke: rgba(255,255,255,.6); stroke-width: 2.5; stroke-linecap: round; }
+.glint.dim { stroke: rgba(255,255,255,.25); }
+.handle { fill: rgba(0,0,0,.1); stroke: rgba(0,0,0,.08); }
+.door-shade { fill: #000; opacity: 0; transition: opacity .6s ease; pointer-events: none; }
+.door { transform-origin: 52px 216px; transition: transform .7s cubic-bezier(.4, 0, .2, 1); }
+.machine.door-open .door { transform: translateX(-30px) scaleX(.2); }
+.machine.door-open .door-shade { opacity: .3; }
 
-/* 7-segment digits */
-.digit { position: relative; width: 12px; height: 20px; margin: 0 1.5px; flex: none; }
-.seg { position: absolute; background: rgba(255,138,61,0.08); border-radius: 1px; }
-.seg.on { background: var(--lgw-led); box-shadow: 0 0 5px var(--lgw-led); }
-.seg-a { top: 0;    left: 1.5px; width: 9px;  height: 2.4px; }
-.seg-g { top: 8.8px; left: 1.5px; width: 9px;  height: 2.4px; }
-.seg-d { top: 17.6px;left: 1.5px; width: 9px;  height: 2.4px; }
-.seg-f { top: 1.5px; left: 0;     width: 2.4px; height: 8px; }
-.seg-b { top: 1.5px; left: 9.6px; width: 2.4px; height: 8px; }
-.seg-e { top: 10.5px;left: 0;     width: 2.4px; height: 8px; }
-.seg-c { top: 10.5px;left: 9.6px; width: 2.4px; height: 8px; }
-.colon { position: relative; width: 5px; height: 20px; flex: none; display: inline-block; }
-.colon i { display: block; width: 2.4px; height: 2.4px; border-radius: 50%; background: var(--lgw-led); box-shadow: 0 0 5px var(--lgw-led); position: absolute; left: 1px; }
-.colon i:first-child { top: 6px; }
-.colon i:last-child { top: 12px; }
+/* done */
+.done-mark { opacity: 0; transform-origin: 150px 216px; transform: scale(.6); transition: opacity .4s ease, transform .5s cubic-bezier(.3, 1.6, .5, 1); }
+.done-bg { fill: var(--lgw-done); opacity: .92; }
+.done-check { fill: none; stroke: #fff; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 40; stroke-dashoffset: 40; }
+.machine.is-done .done-mark { opacity: 1; transform: scale(1); }
+.machine.is-done .done-check { animation: lgw-check .5s ease forwards .3s; }
+@keyframes lgw-check { to { stroke-dashoffset: 0; } }
+
+.machine.is-paused * { animation-play-state: paused !important; }
+.machine.is-off .art .body { filter: saturate(.85); }
+
+/* status row */
+.status-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.status-badge {
+  width: 36px; height: 36px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--lgw-active);
+  background: color-mix(in srgb, var(--lgw-active) 16%, transparent);
+}
+.status-badge ha-icon { --mdc-icon-size: 20px; }
+.status-text { display: flex; flex-direction: column; min-width: 0; }
+.status-label { font-size: .98rem; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-sub { font-size: .78rem; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* phase stepper */
+.phases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; }
+.phase { display: flex; flex-direction: column; gap: 5px; }
+.phase .bar { position: relative; display: block; height: 4px; border-radius: 2px; overflow: hidden; background: var(--divider-color, rgba(127,127,127,.2)); }
+.phase .bar i { position: absolute; inset: 0; transform: scaleX(0); transform-origin: left; background: var(--lgw-active); border-radius: 2px; transition: transform .6s ease; }
+.phase.done .bar i { transform: scaleX(1); }
+.phase.current .bar i { transform: scaleX(1); background: linear-gradient(90deg, var(--lgw-active) 0%, color-mix(in srgb, var(--lgw-active) 30%, transparent) 50%, var(--lgw-active) 100%); background-size: 200% 100%; animation: lgw-shimmer 1.6s linear infinite; }
+.phase.current.held .bar i { animation: none; opacity: .6; }
+@keyframes lgw-shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+.plabel { font-size: .7rem; color: var(--secondary-text-color); text-align: center; letter-spacing: .02em; }
+.phase.current .plabel { color: var(--lgw-active); font-weight: 600; }
+.phase.done .plabel { color: var(--primary-text-color); }
 
 /* chips */
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chips:empty { display: none; }
 .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.72rem;
-  color: var(--secondary-text-color);
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: .72rem; color: var(--secondary-text-color);
   background: var(--secondary-background-color, rgba(127,127,127,.12));
-  border-radius: 12px;
-  padding: 3px 8px 3px 6px;
+  border-radius: 12px; padding: 3px 9px 3px 6px;
 }
 .chip ha-icon { --mdc-icon-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .machine * { animation-duration: 0s !important; animation-iteration-count: 1 !important; }
+}
 `;
 
 customElements.define("lg-washer-card", LgWasherCard);
